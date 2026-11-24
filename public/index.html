@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>جريمة غامضة - لعبة تحقيق أونلاين</title>
+  <style>
+    body { font-family: 'Segoe UI', Tahoma, sans-serif; background: #121212; color: #f0f0f0; margin: 0; padding: 15px; text-align: center; }
+    .box { background: #1e1e1e; border-radius: 12px; padding: 20px; max-width: 850px; margin: 15px auto; box-shadow: 0 4px 15px rgba(0,0,0,0.5); }
+    input, select, button { padding: 10px 15px; margin: 5px; border-radius: 8px; border: none; font-size: 16px; }
+    button { background: #c0392b; color: white; cursor: pointer; font-weight: bold; }
+    button:hover { background: #e74c3c; }
+    .role-badge { background: #2c3e50; padding: 10px; border-radius: 8px; border: 2px solid #e74c3c; margin-bottom: 15px; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; margin-top: 15px; }
+    .card { background: #2a2a2a; padding: 12px; border-radius: 8px; border: 1px solid #444; text-align: right; }
+    .weapon { color: #ff7675; font-weight: bold; }
+    .evidence { color: #74b9ff; font-weight: bold; }
+    .hint-card { background: #2d3436; border: 1px solid #fdcb6e; padding: 10px; border-radius: 8px; }
+    .selected-opt { background: #fdcb6e; color: #000; font-weight: bold; padding: 3px 8px; border-radius: 5px; }
+    #chatBox { height: 150px; overflow-y: auto; background: #111; border: 1px solid #333; padding: 10px; text-align: right; border-radius: 8px; margin-bottom: 10px; }
+  </style>
+</head>
+<body>
+
+  <h1>🕵️‍♂️ لغز الجريمة الغامضة</h1>
+
+  <div id="loginScreen" class="box">
+    <input type="text" id="playerName" placeholder="اكتب اسمك هنا">
+    <input type="text" id="roomCode" placeholder="رمز الغرفة (مثلاً: 1234)">
+    <button onclick="joinGame()">دخول الغرفة</button>
+  </div>
+
+  <div id="lobbyScreen" class="box" style="display:none;">
+    <h3>اللاعبون في الغرفة (<span id="playerCount">0</span>/6)</h3>
+    <ul id="playersList" style="list-style:none; padding:0;"></ul>
+    <button onclick="startGame()">ابدأ التحقيق (يتطلب 6 لاعبين)</button>
+  </div>
+
+  <div id="gameScreen" style="display:none;">
+    <div class="box role-badge">
+      <h2 id="myRoleTitle">دورك: ...</h2>
+      <p id="secretDetails"></p>
+      <p id="phaseBanner" style="color:#fdcb6e; font-weight:bold;">في انتظار القاتل لاختيار السلاح والدليل...</p>
+    </div>
+
+    <!-- لوحة اختيار القاتل -->
+    <div id="killerPanel" class="box" style="display:none; border: 2px solid #ff7675;">
+      <h3>🔪 أيها القاتل، اختر أداة الجريمة والدليل:</h3>
+      <select id="killerWeaponSelect"></select>
+      <select id="killerEvidenceSelect"></select>
+      <button onclick="submitMurder()">تأكيد الجريمة</button>
+    </div>
+
+    <!-- لوحة اغتيال شاهد العيان (تظهر للقاتل فقط في النهاية) -->
+    <div id="witnessGuessPanel" class="box" style="display:none; border: 2px solid #e17055; background: #2d1414;">
+      <h3>🎯 فرصة القاتل الأخيرة: من هو شاهد العيان؟</h3>
+      <select id="witnessSelect"></select>
+      <button onclick="submitWitnessGuess()">تنفيذ الاغتيال!</button>
+    </div>
+
+    <!-- تلميحات الطبيب الشرعي -->
+    <div class="box">
+      <h3>🩺 كروت الطبيب الشرعي (التلميحات)</h3>
+      <div id="hintsContainer" class="grid"></div>
+    </div>
+
+    <!-- كروت اللاعبين -->
+    <div class="box">
+      <h3>🗂️ ملفات المشتبه بهم والأدلة</h3>
+      <div id="playersCardsContainer" class="grid"></div>
+    </div>
+
+    <!-- لوحة الاتهام للمحققين -->
+    <div id="accusePanel" class="box" style="display:none;">
+      <h3>⚖️ تقديم الاتهام النهائي</h3>
+      <select id="accusePlayer"></select>
+      <select id="accuseWeapon"></select>
+      <select id="accuseEvidence"></select>
+      <button onclick="sendAccusation()">إصدار الحكم!</button>
+    </div>
+
+    <!-- الدردشة الكتابية -->
+    <div class="box">
+      <h3>💬 نقاش المحققين (ملاحظة: الطبيب الشرعي ممنوع من الكلام!)</h3>
+      <div id="chatBox"></div>
+      <input type="text" id="chatInput" placeholder="اكتب استنتاجك هنا..." style="width: 65%;">
+      <button onclick="sendMessage()">إرسال</button>
+    </div>
+  </div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script>
+    const socket = io();
+    let currentRoom = '';
+    let myData = null;
+
+    function joinGame() {
+      const name = document.getElementById('playerName').value.trim();
+      currentRoom = document.getElementById('roomCode').value.trim();
+      if (!name || !currentRoom) return alert('الرجاء إدخال الاسم ورمز الغرفة');
+      socket.emit('joinRoom', { roomCode: currentRoom, playerName: name });
+      document.getElementById('loginScreen').style.display = 'none';
+      document.getElementById('lobbyScreen').style.display = 'block';
+    }
+
+    socket.on('errorMsg', msg => alert(msg));
+
+    socket.on('updatePlayers', players => {
+      document.getElementById('playerCount').innerText = players.length;
+      document.getElementById('playersList').innerHTML = players.map(p => `<li>👤 ${p.name}</li>`).join('');
+    });
+
+    function startGame() { socket.emit('startGame', currentRoom); }
+
+    socket.on('gameStarted', ({ me, secretInfo, allPlayers, hints }) => {
+      myData = me;
+      document.getElementById('lobbyScreen').style.display = 'none';
+      document.getElementById('gameScreen').style.display = 'block';
+
+      document.getElementById('myRoleTitle').innerText = `دورك السري: ${me.role}`;
+      let secretText = '';
+      if (secretInfo.killerName) secretText += `⚠️ القاتل هو: ${secretInfo.killerName}. `;
+      if (secretInfo.accompliceName) secretText += `🤝 الشريك هو: ${secretInfo.accompliceName}.`;
+      document.getElementById('secretDetails').innerText = secretText;
+
+      if (me.role === 'القاتل') {
+        document.getElementById('killerPanel').style.display = 'block';
+        document.getElementById('killerWeaponSelect').innerHTML = me.weapons.map(w => `<option>${w}</option>`).join('');
+        document.getElementById('killerEvidenceSelect').innerHTML = me.evidence.map(e => `<option>${e}</option>`).join('');
+      }
+
+      if (me.role !== 'الطبيب الشرعي' && me.role !== 'القاتل') {
+        document.getElementById('accusePanel').style.display = 'block';
+        setupAccuseDropdowns(allPlayers);
+      }
+
+      if (me.role === 'الطبيب الشرعي') {
+        document.getElementById('chatInput').disabled = true;
+        document.getElementById('chatInput').placeholder = "أنت الطبيب الشرعي، ممنوع من الكلام!";
+      }
+
+      renderHints(hints);
+      renderPlayersCards(allPlayers);
+    });
+
+    function submitMurder() {
+      const weapon = document.getElementById('killerWeaponSelect').value;
+      const evidence = document.getElementById('killerEvidenceSelect').value;
+      socket.emit('killerSelect', { roomCode: currentRoom, weapon, evidence });
+      document.getElementById('killerPanel').style.display = 'none';
+    }
+
+    socket.on('solutionRevealed', ({ killer, weapon, evidence }) => {
+      document.getElementById('secretDetails').innerText += ` | 🩸 الجريمة: ${killer} استخدم (${weapon}) وترك (${evidence})`;
+    });
+
+    socket.on('phaseChanged', msg => { document.getElementById('phaseBanner').innerText = msg; });
+
+    function renderHints(hints) {
+      const container = document.getElementById('hintsContainer');
+      container.innerHTML = hints.map((h, idx) => `
+        <div class="hint-card">
+          <strong>${h.title}</strong><br><br>
+          ${h.options.map(opt => {
+            if (myData.role === 'الطبيب الشرعي') {
+              return `<button style="padding:4px 8px; font-size:13px; background:${h.selected === opt ? '#fdcb6e' : '#444'}; color:${h.selected === opt ? '#000' : '#fff'}" onclick="selectHint(${idx}, '${opt}')">${opt}</button>`;
+            }
+            return h.selected === opt ? `<span class="selected-opt">${opt}</span>` : `<span style="color:#888; font-size:13px;"> ${opt} </span>`;
+          }).join(' ')}
+        </div>
+      `).join('');
+    }
+
+    function selectHint(hintIndex, option) { socket.emit('updateHint', { roomCode: currentRoom, hintIndex, option }); }
+    socket.on('hintsUpdated', hints => renderHints(hints));
+
+    function renderPlayersCards(players) {
+      const container = document.getElementById('playersCardsContainer');
+      container.innerHTML = players.filter(p => p.weapons.length > 0).map(p => `
+        <div class="card">
+          <h4>👤 ${p.name}</h4>
+          <div class="weapon">🔪 الأسلحة: ${p.weapons.join(' ، ')}</div>
+          <div class="evidence" style="margin-top:6px;">🔍 الأدلة: ${p.evidence.join(' ، ')}</div>
+        </div>
+      `).join('');
+    }
+
+    function setupAccuseDropdowns(players) {
+      const suspects = players.filter(p => p.weapons.length > 0);
+      document.getElementById('accusePlayer').innerHTML = suspects.map(p => `<option value="${p.id}">${p.name}</option>`).join('');
+      const updateItems = () => {
+        const selected = suspects.find(p => p.id === document.getElementById('accusePlayer').value);
+        document.getElementById('accuseWeapon').innerHTML = selected.weapons.map(w => `<option>${w}</option>`).join('');
+        document.getElementById('accuseEvidence').innerHTML = selected.evidence.map(e => `<option>${e}</option>`).join('');
+      };
+      document.getElementById('accusePlayer').onchange = updateItems;
+      updateItems();
+    }
+
+    function sendAccusation() {
+      const suspectId = document.getElementById('accusePlayer').value;
+      const weapon = document.getElementById('accuseWeapon').value;
+      const evidence = document.getElementById('accuseEvidence').value;
+      if (confirm('هل أنت متأكد من هذا الاتهام؟')) {
+        socket.emit('makeAccusation', { roomCode: currentRoom, suspectId, weapon, evidence });
+      }
+    }
+
+    socket.on('startWitnessGuess', candidates => {
+      document.getElementById('witnessGuessPanel').style.display = 'block';
