@@ -38,17 +38,38 @@ function shuffle(array) {
 }
 
 io.on('connection', (socket) => {
-  socket.on('joinRoom', ({ roomCode, playerName }) => {
+  // 1. إنشاء غرفة جديدة برمز عشوائي
+  socket.on('createRoom', ({ playerName }) => {
+    const roomCode = Math.floor(1000 + Math.random() * 9000).toString(); // رمز من 4 أرقام
+    rooms[roomCode] = { players: [], state: 'lobby', solution: null, hints: [], hostId: socket.id };
+    
     socket.join(roomCode);
-    if (!rooms[roomCode]) {
-      rooms[roomCode] = { players: [], state: 'lobby', solution: null, hints: [] };
-    }
+    rooms[roomCode].players.push({ id: socket.id, name: playerName, role: '', weapons: [], evidence: [] });
+    
+    socket.emit('roomEntered', { roomCode, isHost: true });
+    io.to(roomCode).emit('updatePlayers', rooms[roomCode].players);
+  });
+
+  // 2. الانضمام لغرفة موجودة مسبقاً
+  socket.on('joinRoom', ({ roomCode, playerName }) => {
     const room = rooms[roomCode];
+    if (!room) {
+      socket.emit('errorMsg', 'رقم الغرفة غير صحيح أو الغرفة غير موجودة!');
+      return;
+    }
+    if (room.state !== 'lobby') {
+      socket.emit('errorMsg', 'اللعبة بدأت بالفعل في هذه الغرفة!');
+      return;
+    }
     if (room.players.length >= 6) {
       socket.emit('errorMsg', 'الغرفة ممتلئة (الحد الأقصى 6 لاعبين)');
       return;
     }
+
+    socket.join(roomCode);
     room.players.push({ id: socket.id, name: playerName, role: '', weapons: [], evidence: [] });
+    
+    socket.emit('roomEntered', { roomCode, isHost: false });
     io.to(roomCode).emit('updatePlayers', room.players);
   });
 
@@ -57,6 +78,7 @@ io.on('connection', (socket) => {
     io.to(roomCode).emit('newChat', { sender, text });
   });
 
+  // بدء اللعبة
   socket.on('startGame', (roomCode) => {
     const room = rooms[roomCode];
     if (!room || room.players.length !== 6) {
@@ -119,7 +141,6 @@ io.on('connection', (socket) => {
     io.to(roomCode).emit('hintsUpdated', room.hints);
   });
 
-  // اتهام المحققين -> ينتقل لاغتيال شاهد العيان إذا كان صحيحاً
   socket.on('makeAccusation', ({ roomCode, suspectId, weapon, evidence }) => {
     const room = rooms[roomCode];
     const killer = room.players.find(x => x.role === 'القاتل');
@@ -128,7 +149,6 @@ io.on('connection', (socket) => {
       room.state = 'witness_assassination';
       io.to(roomCode).emit('phaseChanged', '⚠️ كُشف القاتل! الآن القاتل لديه فرصة أخيرة لاغتيال شاهد العيان!');
       
-      // إرسال قائمة المرشحين للقاتل فقط ليختار شاهد العيان
       const candidates = room.players.filter(p => p.role !== 'القاتل' && p.role !== 'الشريك' && p.role !== 'الطبيب الشرعي');
       io.to(killer.id).emit('startWitnessGuess', candidates.map(c => ({ id: c.id, name: c.name })));
     } else {
@@ -139,7 +159,6 @@ io.on('connection', (socket) => {
     }
   });
 
-  // تخمين القاتل لشاهد العيان
   socket.on('guessWitness', ({ roomCode, targetId }) => {
     const room = rooms[roomCode];
     const witness = room.players.find(x => x.role === 'شاهد العيان');
